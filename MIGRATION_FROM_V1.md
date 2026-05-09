@@ -2,6 +2,15 @@
 
 本文档列出 v2 相对 v1 的全部增量改动，便于既有 v1 调用方平滑迁移。
 
+## v2.1 增量（2026-05-09 更新）
+
+实战中发现两个 agent 用同一套 v2 skill 会创建出字段不一致的 Base（字段集差异 / 类型差异 / 同义字段如 `guidename` vs `guide_name` / 缺表）。根因是 schema 用自然语言 markdown 描述，每个 agent 解读不同。v2.1 收敛：
+
+- **新增 [`references/schema.json`](references/schema.json)**：机器可读权威 schema；所有字段定义、类型、enum、必填、命名禁止表都在这里。bootstrap 必须读 schema.json 直接生成 field-create 命令，不再凭文档自然语言解读。
+- **bootstrap 改 schema-driven + 回读校验**：建完字段后必须 `+field-list` 回读比对 schema.json；类型不一致或字段缺失时 `binding_status` 不得置为 `ready`。
+- **Canonical 字段命名强约束**：`schema.json.field_naming_rules.forbidden_synonyms` 列出禁止变体（如 `guidename` / `guideName` / `导购姓名` 不得替代 `guide_name`）。
+- **删除 `try_on_result` 字段**：试穿结果改由反馈四字段 + `not_buy_reason` + `followup_intent` 自然表达，主表不再单独维护强枚举字段。主表 21→20 字段，required 8→7。
+
 ## 1. Skill 列表变化
 
 | v1 Skill | v2 状态 | 说明 |
@@ -46,8 +55,8 @@
 - `fabric`：面料
 - `category`：品类（外套 / 裤 / 裙 / 配饰）
 
-### 调整
-- `try_on_result` 改为强枚举：`合适` / `待考虑` / `未成交` / `已购`
+### 删除（v2.1）
+- `try_on_result`：试穿结果改由反馈四字段 + `not_buy_reason` + `followup_intent` 自然表达，主表不再维护此字段
 
 ### 保留（不动）
 反馈类字段全部保留，由 AI 主动做语义拆分：
@@ -56,14 +65,13 @@
 - `liked_points`（喜欢点）
 - `disliked_points`（不喜欢点）
 
-### v2 主表 required（8 个）
+### v2.1 主表 required（7 个）
 - `session_id`
 - `guide_name`
 - `fitting_at`
 - `operator_id`
 - `product_code`
 - `product_name`
-- `try_on_result`
 - `raw_notes`
 
 ## 3. 「线索回访表」字段变化

@@ -1,12 +1,14 @@
 ---
 name: lobster-fitting-bitable-bootstrap
-description: 在试衣数据准备写入飞书多维表格前，检查并补齐 bitable_binding、Base、数据表和必要字段，并按 v2 binding-config-protocol 持久化 binding。适用于首次部署、binding 缺失、表不存在、字段不完整、或连接器返回 no_binding / missing_binding / invalid_binding 时。v2 相对 v1 的关键变化：把"持久化要求"展开为完整协议（双层兜底：平台 KV + Base 内 _系统配置 表）。
+description: 在试衣数据准备写入飞书多维表格前，检查并补齐 bitable_binding、Base、数据表和必要字段，并按 v2 binding-config-protocol 持久化 binding。v2.1 改为 schema-driven：直接读取 references/schema.json 作为权威字段定义，建表/补字段后回读校验，不再凭文档自然语言重新解读。
 ---
 
-# 试衣飞书表格初始化与绑定修复（v2）
+# 试衣飞书表格初始化与绑定修复（v2.1，schema-driven）
 
 ## 目标
 在正式写入前，先完成飞书表链接初始化或基础设施补齐，并输出稳定可复用的 `bitable_binding`，按 [`binding-config-protocol`](../references/binding-config-protocol.md) 双层持久化。
+
+**v2.1 核心改进**：本 skill 改为 schema-driven。建表/建字段必须读取 [`../references/schema.json`](../references/schema.json) 作为机器可读权威定义；所有 select 字段的选项值、required 字段的列表、字段类型映射，都来自 schema.json，不再凭 markdown 自然语言重新解读。这是为了根治"两个 agent 对同一个 SKILL.md 解读出不同字段集"的问题。
 
 ## 何时使用
 - 首次部署导购小龙虾，尚未创建试衣 Base
@@ -61,6 +63,7 @@ description: 在试衣数据准备写入飞书多维表格前，检查并补齐 
 - 不按 `guide_name`、`operator_id`、`sender_id`、`session_id` 创建新的 Base
 - 只有在"没有 binding、也没有可用链接"时，才进入建表或 fallback 搜索流程
 - 若输入是 wiki 链接，先解析真实 `base_token`，不要直接把 wiki token 当 Base token
+- 若发现同一 `project_id` 下已有多个候选 Base，不得继续新建第三个；必须返回 `duplicate_binding_candidates`，要求人工指定唯一 canonical Base 后再写入
 
 ### 2. 先尝试通过链接直达并校验
 - 若已拿到链接，先解析 `base_token / table_id / view_id`
@@ -69,18 +72,39 @@ description: 在试衣数据准备写入飞书多维表格前，检查并补齐 
 - 只有链接不可用或表不存在时，才退回到建表/补表流程
 - 不为"可能已有但未确认"的情况重复创建多个 Base
 
-### 3. 若需建表，串行确保 7 张表存在
-按上节列出的 7 张表，串行执行：
-- 表存在则复用
-- 表缺失则补建
+### 3. 若需建表，schema-driven 串行执行
+**先读取 [`../references/schema.json`](../references/schema.json)**，按 `tables[]` 数组遍历：
+- 对每张表 `t`，调用 `+table-list` 检查 `t.table_name` 是否存在
+  - 存在 → 复用
+  - 不存在 → `+table-create --table-name "{t.table_name}"`
+- 7 张表（含 `_系统配置`）必须全部存在
 - 所有 list / create 操作串行执行，避免并发冲突
+- 不得只建主表跳过其他 6 张
 
-### 4. 校验字段并补齐
-- 先读取真实表结构，再补缺失字段
-- 主表、回访表、画像表、提醒表的 required 字段必须完整
-- 默认字段清单见 [`references/default-schema.md`](references/default-schema.md)
-- required 字段缺失时，应明确返回 `missing_fields` / `missing_tables`，供上游阻断写入
-- 仅补必要字段，不随意扩展
+### 4. 校验字段并补齐（schema-driven）
+对 schema.json 中每张表的每个字段 `f`：
+- `+field-list` 读取线上真实字段
+- 比对：
+  - 字段名缺失 → `+field-create --json '{"field_name":"{f.name}", "type":"{type_id}", ...}'`，**字段名严格使用 `f.name`，不得做大小写/翻译变体**
+  - 字段类型不一致 → `+field-update`（注意飞书侧某些类型变更受限，必要时报错而非擅自改）
+  - select 字段必须按 `f.options` 预置选项；不允许字段建好后让用户填
+- 字段名映射规则：
+  - schema 中 `type=text` → 飞书 Text（短文本/长文本由 description 暗示，统一用 Text）
+  - schema 中 `type=datetime` → 飞书 DateTime（**严禁建成 Text**）
+  - schema 中 `type=select` → 飞书 SingleSelect + 预置 options
+  - schema 中 `type=number` → 飞书 Number
+  - schema 中 `type=checkbox` → 飞书 Checkbox
+  - schema 中 `type=url` → 飞书 Url 或 Text（飞书 Text 字段也能存 URL）
+- 字段名禁止变体（典型）：`guidename` / `guideName` / `导购` / `导购姓名` / `导购名称` 不得替代 `guide_name`；完整禁止表见 schema.json 的 `field_naming_rules.forbidden_synonyms`
+- 若线上已有同义/变体字段，不要把写入映射到变体字段，应补齐 canonical 字段并在 `schema_status` 中标记 `drift_detected`，同时 log 出变体字段名供人工治理
+
+### 4.1 回读校验（v2.1 关键，治本）
+建表+建字段后，**必须再次 `+field-list`** 比对 schema.json：
+- 对 schema 中每个 required 字段，检查线上是否存在且类型一致
+- 缺失 → `schema_status = drift_detected`，binding_status 不得置为 `ready`
+- 类型不一致（例如 `fitting_at` 建成了 text）→ `schema_status = type_mismatch`，binding_status 不得置为 `ready`
+- 出现 schema 中没有的字段（如"导购小龙虾试衣台账"误成字段）→ `schema_status = unexpected_fields`，log 出来供人工删除
+- 只有上述检查全通过，才进入第 5 步构建 `field_map`
 
 ### 5. 构建 field_map
 - 读取每张表的字段列表
@@ -118,6 +142,7 @@ description: 在试衣数据准备写入飞书多维表格前，检查并补齐 
 - bootstrap 阶段应以 required 字段可写为优先目标，而不是追求字段越多越好
 - binding 缺失时，不要只返回 `no_binding` 就结束；应优先尝试"用户给链接 → 自动登记 binding"，再考虑补齐基础设施
 - 若已存在可用 binding，则禁止因新导购触发而再次创建 Base
+- 若没有可用的项目级持久化能力（KV 与 `_系统配置` 均不可写），不得返回 `binding_status = ready`；应返回 `partial` 或 `needs_confirmation`，否则不同 agent 会各自建表
 - 若任一步失败，明确返回失败原因，不伪造 `ready`
 - **v2 强约束**：binding 必须双写（KV + `_系统配置`），单写视为 partial
 

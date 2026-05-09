@@ -58,7 +58,9 @@ runtime / connector 应先读取 sender 级资料缓存，至少尝试继承：
 
 若同一 sender 之前已经明确提供过导购姓名或门店，后续消息默认继承，不应反复询问。
 
-### 2. 主表 required 字段（v2，8 个）
+若没有已确认的 `guide_name`，必须追问导购姓名；不得用 `导购`、`店员`、`销售`、`未知`、`默认导购` 等占位词填充。只有本次明确自报、已确认 profile、卡片确认或可信员工资料可作为 `guide_name` 来源。
+
+### 2. 主表 required 字段（v2.1，7 个）
 主表写入前必须具备：
 - `session_id`
 - `guide_name`
@@ -66,8 +68,9 @@ runtime / connector 应先读取 sender 级资料缓存，至少尝试继承：
 - `operator_id`
 - `product_code`
 - `product_name`
-- `try_on_result`
 - `raw_notes`
+
+> v2.1 移除 `try_on_result`：试穿结果由 `body_effect_desc` / `fit_feedback` / `liked_points` / `disliked_points` / `not_buy_reason` / `followup_intent` 自然表达，不需要再单独维护强枚举字段。
 
 ### 3. operator_id 透传规则
 如果来源是飞书消息，runtime / connector 必须把 sender open_id 作为 `operator_id` 直接透传。该字段不依赖模型提取，不依赖导购补充。
@@ -157,6 +160,14 @@ if no project-level bitable_binding:
     parse link → validate fields → save binding (per binding-config-protocol)
   else:
     run bootstrap fallback
+
+if multiple project-level Base candidates exist:
+  stop write
+  ask operator to choose canonical Base
+
+if guide_name missing and no confirmed sender_profile:
+  stop write
+  ask "请补充导购姓名，之后同一导购可自动沿用。"
 
 if binding_status != ready:
   stop write

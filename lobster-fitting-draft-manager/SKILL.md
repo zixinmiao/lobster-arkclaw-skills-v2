@@ -40,6 +40,8 @@ description: 管理导购试衣录入的 draft 草稿上下文。适用于将飞
 - 新吊牌图、新语音、新文本都先挂到 draft，不得直接生成正式记录
 - draft 在创建或更新时，应优先继承 `guide_profile` / `sender_profile` 中的稳定字段，如 `guide_name`、`store_name`
 - 对同一 sender，若这些字段此前已经确认，不应在后续每条录入里重新追问
+- 若 `guide_profile` / `sender_profile` 中没有已确认 `guide_name`，draft 中必须保留为空并进入待补充，不得用 `导购`、`店员`、`未知`、`默认导购` 等占位词预填
+- 若导购通过卡片确认了 `guide_name`，draft 输出应标记来源为 `card_confirmed`，供后续 sender 级资料继承
 - draft 必须明确绑定：
   - `draft_id`
   - `bundle_id`
@@ -55,11 +57,10 @@ description: 管理导购试衣录入的 draft 草稿上下文。适用于将飞
 
 ## v2 字段对齐
 
-draft 中的候选字段集对齐主表 v2 字段（详见 `../references/bitable-field-contract.md`）：
+draft 中的候选字段集对齐主表 v2.1 字段（详见 `../references/schema.json` 与 `../references/bitable-field-contract.md`）：
 - 商品候选：`product_name` / `product_code` / `color` / `size` / `fabric` / `category` / `tag_price`
 - 反馈候选：`body_effect_desc` / `fit_feedback` / `liked_points` / `disliked_points` / `not_buy_reason` / `followup_intent`
 - 基础：`session_id` / `guide_name` / `store_name` / `fitting_at` / `member_mobile_last4`
-- 试穿结果：`try_on_result`（强枚举）
 
 ## 输出目标
 
@@ -83,6 +84,7 @@ draft 中的候选字段集对齐主表 v2 字段（详见 `../references/bitabl
 - `draft_status != confirmed` 时，`allow_write` 必须为 `false`
 - 单图无文本时，`reason` 必须为 `PENDING_MEDIA_NOT_READY_TO_WRITE`
 - 未经过卡片确认，不得生成正式 `fitting_record`
+- `guide_name` 缺失或为占位词时，`allow_write` 必须为 `false`，`reason` 应包含 `MISSING_REQUIRED_FIELDS`
 - 若 `reset_context = true` 或识别到"重新开始 / 清掉上一条 / 不要关联前文"等明确重开意图，`draft_action` 必须输出 `reset`，且 `write_gate.reason` 固定输出 `CONTEXT_RESET_BY_USER`
 - 若当前输入日期与 `existing_draft` 所属日期不同，则不得因 `existing_draft` 存在而直接 `update`；应优先 `create` / `reset` / `wait`
 

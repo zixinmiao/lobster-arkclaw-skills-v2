@@ -1,13 +1,16 @@
-# bitable field contract (v2)
+# bitable field contract (v2.1)
 
-本文件定义"导购小龙虾"相关飞书多维表格的目标字段语义，用于保证不同 open claw 在写表时对必填字段有一致理解，并在写入前做强制校验。
+本文件定义"导购小龙虾"相关飞书多维表格的目标字段语义。**机器可读权威 schema 在 [`schema.json`](schema.json)，本文件是其人类可读注解版本；如有冲突以 `schema.json` 为准。**
 
 ## 使用原则
+- `schema.json` 是字段定义的 single source of truth；bootstrap 必须直接读取 schema.json 创建/校验字段，不得凭文档自然语言再解读一遍。
 - 本文件描述的是应有字段 / 目标 schema，不是线上实时状态。
 - 线上表里实际已有字段，必须在运行时通过飞书 `field-list` 读取。
 - 写表前必须先做字段检查，判断：`existing_fields` / `missing_required_fields` / `missing_recommended_fields` / `suspicious_fields`。
 - 只要 `missing_required_fields` 非空，就不得正式写入。
 - v2 中，统一字段校验由 `lobster-input-validator` 承担。
+- required 字段必须有可信来源，不允许为了通过校验而写入占位词、角色名或模型猜测值。
+- **字段命名为 canonical，禁止创建同义/变体**：例如导购姓名只能用 `guide_name`，不得用 `guidename`、`guideName`、`导购`、`导购姓名`、`导购名称`。完整禁止表见 `schema.json` 中 `field_naming_rules.forbidden_synonyms`。
 
 ---
 
@@ -18,7 +21,7 @@
 | 字段名 | 含义 | 必需性 | 允许写入 | 禁止写入 |
 |---|---|---|---|---|
 | session_id | 单条试衣记录唯一标识 | required | 统一生成的记录 ID | 手机号、open_id、商品名 |
-| guide_name | 导购展示姓名 | required | 张三、Luna | open_id、手机号 |
+| guide_name | 导购展示姓名 | required | 张三、Luna | open_id、手机号、`导购`、`店员`、`未知`、默认占位名 |
 | fitting_at | 试衣发生时间（datetime） | required | `2026/4/29 10:20` | open_id |
 | store_name | 门店名称 | optional | 杭州万象城店 | open_id |
 | operator_id | 导购飞书 open_id | required | `ou_xxx` | 顾客手机号、姓名 |
@@ -30,7 +33,6 @@
 | fabric | 面料（v2 新增） | optional | 棉、羊毛、聚酯纤维 | open_id |
 | category | 品类（v2 新增） | optional | 上装 / 下装 / 连衣裙 / 外套 / 配饰 | open_id |
 | tag_price | 吊牌价 | optional | `1699` | 非价格文本 |
-| try_on_result | 试穿结果（强枚举） | required | `合适` / `待考虑` / `未成交` / `已购` | 自由文本、纯图片猜测 |
 | body_effect_desc | 上身体型呈现 | recommended | 显瘦、肩窄、显高 | open_id |
 | fit_feedback | 版型反馈 | recommended | 腰部偏紧、袖长合适 | open_id |
 | liked_points | 喜欢点 | recommended | 面料舒服、版型挺括 | open_id |
@@ -42,11 +44,11 @@
 
 ## 1.2 关键硬规则
 - `guide_name` 只能写姓名/展示名，不能写 open_id
+- `guide_name` 只能来自导购本次明确自报、已确认的 `sender_profile/guide_profile`、人工确认卡片提交值或上游可信员工资料；缺失时必须追问，不得填 `导购`、`店员`、`默认导购`、`未知` 等占位值
 - `operator_id` 必须直接透传飞书 sender open_id，不依赖模型提取
 - `session_id` 是主表唯一标识字段，写表时必须稳定生成
 - `member_mobile_last4` 非空 → 视为会员；不再单独维护 `is_member` 字段
 - `product_name` / `product_code` 必须优先取本次识别结果，不能被历史上下文商品覆盖
-- `try_on_result` 必须取自枚举集，不允许自由文本
 - `fitting_at` 是 datetime 单字段，不再拆 `fitting_date` + `fitting_time`
 
 ## 1.3 反馈四字段填充原则（v2 强调）
@@ -55,27 +57,42 @@
 - 不强求每次写满四个字段
 - 不允许合并到单字段，因为多维度独立的字段对后续会员画像聚合分析有独立价值（喜欢点/不喜欢点是品类信号、上身效果是体型信号、版型反馈是产品信号）
 
-## 1.4 最小可写字段集（v2，8 个 required）
+## 1.4 最小可写字段集（v2.1，7 个 required）
 - `session_id`
 - `guide_name`
 - `fitting_at`
 - `operator_id`
 - `product_code`
 - `product_name`
-- `try_on_result`
 - `raw_notes`
+
+> v2.1 变化：`try_on_result` 已从主表移除（试穿结果由反馈四字段+`not_buy_reason`+`followup_intent` 自然表达，无需额外强枚举字段）。
+
+## 1.4.1 required 字段来源与追问策略
+
+required 字段不只检查"是否有值"，还要检查"值是否来自可信来源"。不同 agent 必须按同一策略处理：
+
+| 字段名 | 可信来源 | 缺失/不可信时动作 |
+|---|---|---|
+| `session_id` | runtime 统一生成 | 阻断写入，重新生成稳定 ID |
+| `guide_name` | 本次导购自报、已确认 `sender_profile/guide_profile`、人工确认卡片、可信员工资料 | 阻断写入并追问"请补充导购姓名" |
+| `fitting_at` | 消息时间、卡片确认时间、用户明确时间 | 阻断写入或用消息时间生成，并在 `merge_notes` 标明来源 |
+| `operator_id` | 飞书消息 metadata 的 sender open_id | 阻断写入；不得要求导购手填 open_id |
+| `product_code` | 本次 OCR、导购文本/语音明确说明、卡片确认 | 阻断写入并要求补吊牌/货号 |
+| `product_name` | 本次 OCR、导购文本/语音明确说明、卡片确认 | 阻断写入并要求补商品名 |
+| `raw_notes` | 原始文本/语音转写/卡片备注 | 阻断写入并要求补充说明 |
+
+不得把以下值当作有效 `guide_name`：`导购`、`店员`、`销售`、`营业员`、`未知`、`默认导购`、`测试导购`、`N/A`、空字符串、open_id、手机号。
 
 ## 1.5 v2 相对 v1 的字段变化
 
-**删除（5）**：`source_bundle_id` / `source_message_ids` / `source_channel` / `session_status` / `ocr_confidence`（运维/状态字段，业务表不承载）
+**删除（6）**：`source_bundle_id` / `source_message_ids` / `source_channel` / `session_status` / `ocr_confidence`（运维/状态字段，业务表不承载）+ `try_on_result`（v2.1 移除，由反馈四字段 + `not_buy_reason` + `followup_intent` 自然表达）
 
 **合并（2 → 1）**：`fitting_date` + `fitting_time` → `fitting_at`
 
 **简化（1）**：`is_member` 删除；`member_mobile_last4` 非空即会员
 
 **新增（3）**：`fabric` / `category` / `media_urls`
-
-**调整**：`try_on_result` 从自由文本改为强枚举
 
 ---
 

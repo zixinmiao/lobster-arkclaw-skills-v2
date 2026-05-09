@@ -1,0 +1,177 @@
+{
+  "schema_version": "v2.1",
+  "description": "导购小龙虾试衣台账 canonical schema（机器可读权威版本）。所有 skill 的字段创建/校验/写入必须以本文件为准；自然语言描述（contract / default-schema / SKILL.md）出现冲突时以本文件为准。",
+  "base": {
+    "name": "导购小龙虾试衣台账",
+    "binding_scope": "project"
+  },
+  "tables": [
+    {
+      "table_name": "试衣商品记录",
+      "is_main": true,
+      "dedupe_key": "session_id",
+      "fields": [
+        { "name": "session_id", "type": "text", "required": true, "description": "试衣记录唯一标识；runtime 生成" },
+        { "name": "guide_name", "type": "text", "required": true, "description": "导购展示姓名", "forbid_values": ["导购", "店员", "销售", "营业员", "未知", "默认导购", "测试导购", "N/A", ""], "forbid_pattern": "^ou_" },
+        { "name": "fitting_at", "type": "datetime", "required": true, "datetime_format": "yyyy/MM/dd HH:mm" },
+        { "name": "store_name", "type": "text", "required": false },
+        { "name": "operator_id", "type": "text", "required": true, "description": "导购飞书 open_id；由 connector 透传", "match_pattern": "^ou_" },
+        { "name": "member_mobile_last4", "type": "text", "required": false, "match_pattern": "^[0-9]{4}$" },
+        { "name": "product_code", "type": "text", "required": true, "min_length": 4 },
+        { "name": "product_name", "type": "text", "required": true },
+        { "name": "color", "type": "text", "required": false },
+        { "name": "size", "type": "text", "required": false },
+        { "name": "fabric", "type": "text", "required": false, "description": "面料；从吊牌成分行提取" },
+        { "name": "category", "type": "select", "required": false, "options": ["上装", "下装", "连衣裙", "外套", "配饰"] },
+        { "name": "tag_price", "type": "number", "required": false, "number_precision": 1 },
+        { "name": "body_effect_desc", "type": "text", "required": false, "description": "上身体型呈现（显瘦/肩窄/显高）" },
+        { "name": "fit_feedback", "type": "text", "required": false, "description": "版型反馈（腰部偏紧/袖长合适）" },
+        { "name": "liked_points", "type": "text", "required": false, "description": "客户主观喜欢点" },
+        { "name": "disliked_points", "type": "text", "required": false, "description": "客户主观不喜欢点" },
+        { "name": "not_buy_reason", "type": "text", "required": false },
+        { "name": "followup_intent", "type": "text", "required": false },
+        { "name": "raw_notes", "type": "text", "required": true, "description": "原始文本/语音转写/卡片备注" },
+        { "name": "media_urls", "type": "text", "required": false, "description": "多 URL 用换行分隔" }
+      ]
+    },
+    {
+      "table_name": "试衣Session索引",
+      "dedupe_key": "session_id",
+      "fields": [
+        { "name": "session_id", "type": "text", "required": true },
+        { "name": "link_action", "type": "text", "required": false },
+        { "name": "link_confidence", "type": "number", "required": false },
+        { "name": "link_reason", "type": "text", "required": false },
+        { "name": "needs_confirmation", "type": "checkbox", "required": false },
+        { "name": "bundle_id", "type": "text", "required": false },
+        { "name": "message_ids", "type": "text", "required": false },
+        { "name": "bundle_status", "type": "select", "required": false, "options": ["pending_media", "single", "merged"] },
+        { "name": "bundle_window_seconds", "type": "number", "required": false }
+      ]
+    },
+    {
+      "table_name": "试衣素材索引",
+      "dedupe_key": "media_id",
+      "fields": [
+        { "name": "media_id", "type": "text", "required": true },
+        { "name": "session_id", "type": "text", "required": true },
+        { "name": "product_code", "type": "text", "required": false },
+        { "name": "media_type", "type": "select", "required": false, "options": ["tag_image", "fitting_image", "voice", "other"] },
+        { "name": "media_url", "type": "url", "required": false },
+        { "name": "media_source", "type": "text", "required": false },
+        { "name": "message_id", "type": "text", "required": false },
+        { "name": "captured_at", "type": "datetime", "required": false },
+        { "name": "ocr_confidence", "type": "number", "required": false },
+        { "name": "asr_confidence", "type": "number", "required": false }
+      ]
+    },
+    {
+      "table_name": "线索回访表",
+      "dedupe_key": "线索ID",
+      "fields": [
+        { "name": "线索ID", "type": "text", "required": true },
+        { "name": "来源试衣记录ID", "type": "text", "required": true },
+        { "name": "日期", "type": "datetime", "required": true },
+        { "name": "导购名称", "type": "text", "required": false },
+        { "name": "导购open_id", "type": "text", "required": true, "match_pattern": "^ou_" },
+        { "name": "会员尾号", "type": "text", "required": true, "match_pattern": "^[0-9]{4}$" },
+        { "name": "试穿单品", "type": "text", "required": true },
+        { "name": "回访原因", "type": "text", "required": true },
+        { "name": "建议触达时机类型", "type": "select", "required": false, "options": ["next_day", "same_week", "event_trigger"] },
+        { "name": "计划触达时间", "type": "datetime", "required": false },
+        { "name": "建议回访内容", "type": "text", "required": false },
+        { "name": "推荐动作", "type": "text", "required": false },
+        { "name": "优先级", "type": "select", "required": false, "options": ["高", "中", "低"] },
+        { "name": "状态", "type": "select", "required": true, "options": ["pending", "waiting_trigger", "done", "cancelled"] }
+      ]
+    },
+    {
+      "table_name": "会员画像表",
+      "dedupe_key": "会员尾号",
+      "fields": [
+        { "name": "会员尾号", "type": "text", "required": true, "match_pattern": "^[0-9]{4}$" },
+        { "name": "穿着偏好", "type": "text", "required": false, "description": "v2 合并：风格 + 版型偏好" },
+        { "name": "尺码偏好", "type": "text", "required": false },
+        { "name": "颜色偏好", "type": "text", "required": false },
+        { "name": "面料偏好", "type": "text", "required": false },
+        { "name": "价格敏感度", "type": "text", "required": false },
+        { "name": "常见未购原因", "type": "text", "required": false },
+        { "name": "体型备注", "type": "text", "required": false },
+        { "name": "最近更新时间", "type": "datetime", "required": true },
+        { "name": "最近来源试衣记录", "type": "text", "required": true },
+        { "name": "画像置信度", "type": "select", "required": true, "options": ["高", "中", "低"] }
+      ]
+    },
+    {
+      "table_name": "提醒派发表",
+      "dedupe_key": "提醒ID",
+      "fields": [
+        { "name": "提醒ID", "type": "text", "required": true },
+        { "name": "来源线索ID", "type": "text", "required": true },
+        { "name": "导购open_id", "type": "text", "required": true, "match_pattern": "^ou_" },
+        { "name": "计划提醒时间", "type": "datetime", "required": true },
+        { "name": "是否已提醒", "type": "checkbox", "required": true },
+        { "name": "实际提醒时间", "type": "datetime", "required": false },
+        { "name": "提醒渠道", "type": "select", "required": false, "options": ["feishu_card", "feishu_dm"] },
+        { "name": "状态", "type": "select", "required": true, "options": ["scheduled", "sent", "cancelled", "failed"] }
+      ]
+    },
+    {
+      "table_name": "_系统配置",
+      "dedupe_key": "config_key",
+      "description": "binding 自举入口；详见 binding-config-protocol.md",
+      "fields": [
+        { "name": "config_key", "type": "text", "required": true },
+        { "name": "config_value", "type": "text", "required": true },
+        { "name": "schema_version", "type": "text", "required": true },
+        { "name": "updated_at", "type": "datetime", "required": true },
+        { "name": "updated_by_operator_id", "type": "text", "required": false }
+      ]
+    }
+  ],
+  "field_naming_rules": {
+    "canonical_only": true,
+    "case_sensitive": true,
+    "no_synonyms": true,
+    "forbidden_synonyms": {
+      "guide_name": ["guidename", "guideName", "GuideName", "导购", "导购姓名", "导购名称", "店员姓名", "导购展示名"],
+      "operator_id": ["operatorId", "openId", "open_id", "导购openid"],
+      "fitting_at": ["fitting_date", "fitting_time", "试衣时间", "试衣日期", "FittingAt"],
+      "member_mobile_last4": ["mobileLast4", "phone_last4", "会员尾号_主表"],
+      "product_code": ["productCode", "skuCode", "款号"],
+      "product_name": ["productName", "商品名"]
+    },
+    "rationale": "不同 agent 必须创建完全相同的字段名。AGENT 不得擅自换驼峰、下划线、或翻译为中文等价表达。如果检测到线上已存在同义字段，应补齐 canonical 字段并标记 schema_drift，不得静默映射到变体字段。"
+  },
+  "type_mapping_to_feishu": {
+    "text": "Text（多行文本）",
+    "number": "Number（数字）",
+    "datetime": "DateTime（日期时间）",
+    "select": "SingleSelect（单选）",
+    "url": "Url（超链接）",
+    "checkbox": "Checkbox（复选框）"
+  },
+  "value_validation_rules": {
+    "guide_name": {
+      "must_have_trusted_source": true,
+      "trusted_sources": ["current_message_explicit", "sender_profile_confirmed", "guide_profile_confirmed", "card_confirmed", "trusted_contact"],
+      "blocking_action": "ask_user: 请补充导购姓名，之后同一导购可自动沿用。"
+    },
+    "operator_id": {
+      "must_have_trusted_source": true,
+      "trusted_sources": ["message_metadata"],
+      "rationale": "operator_id 必须由 connector 从飞书消息 metadata 直接透传，不允许由模型从正文推断或导购手填"
+    }
+  },
+  "bootstrap_protocol": {
+    "approach": "schema_driven",
+    "steps": [
+      "1. 读取本 schema.json 文件作为权威字段定义",
+      "2. 对每张表：调用 +table-list 检查是否存在；不存在则 +table-create",
+      "3. 对每个字段：调用 +field-list 检查是否存在 + 类型一致；不一致则 +field-create 或 +field-update",
+      "4. select 字段创建时必须使用 schema 中 options 定义的选项；不允许字段建好后让用户填入选项",
+      "5. 创建/更新完成后，再次 +field-list 回读，比对 schema；任何 missing/mismatch 必须返回 schema_status=drift_detected，不得标记为 ready",
+      "6. 所有字段名严格按 schema.fields[].name；不得创建大小写或翻译变体"
+    ]
+  }
+}

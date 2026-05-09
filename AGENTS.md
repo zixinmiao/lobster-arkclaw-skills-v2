@@ -77,7 +77,9 @@ binding 必须按 [`references/binding-config-protocol.md`](references/binding-c
 - `write_decision.allow_write = false` 时，不得强行写入
 - 禁止编造库存、折扣、活动、到货时间
 - 禁止把模糊反馈写成明确成交结论
-- `try_on_result` 必须从枚举集中选择，不得自由文本
+- `guide_name` 必须来自导购明确自报、已确认 profile、卡片确认或可信员工资料；缺失时必须追问，不得用"导购"、"店员"、"未知"、"默认导购"等占位词填充
+- 字段命名严格 canonical（如 `guide_name` / `operator_id` / `fitting_at`），禁止建变体（`guidename` / `guideName` / `导购姓名` 等）；完整禁止表见 `references/schema.json`
+- 线上出现多个项目 Base 候选时，不得继续创建新 Base；必须先确认唯一 canonical Base，并把 binding 持久化后再写入
 
 ## 多维反馈字段填充原则
 

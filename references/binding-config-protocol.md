@@ -38,7 +38,6 @@ binding 对象的完整 schema：
       "operator_id": "fld_xxx",
       "product_code": "fld_xxx",
       "product_name": "fld_xxx",
-      "try_on_result": "fld_xxx",
       "raw_notes": "fld_xxx"
     }
   },
@@ -162,6 +161,8 @@ KV.get(key=`binding:${project_id}`)
 - 同一 `project_id` 下，所有写入操作建议串行（队列化）
 - 多导购同时进入"首次建表"时，应用分布式锁（如 KV.set with NX）；获得锁的实例执行 bootstrap，其他实例等待并复用结果
 - binding 不应按 sender / session 分裂；否则违背"项目级共享"承诺
+- 若同一 `project_id` 下已经出现多个 Base 候选，connector / runtime 必须进入冲突处理：返回候选 `base_token/base_url/tables/last_verified_at`，要求人工选择 canonical Base；在确认前不得创建新 Base，也不得继续正式写表
+- 冲突收敛后，应把 canonical Base 写回 KV，并在该 Base 的 `_系统配置` 表中保存 `binding:project`；非 canonical Base 只作为历史排查对象，不再新增写入
 
 ## 安全边界
 

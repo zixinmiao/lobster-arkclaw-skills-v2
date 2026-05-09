@@ -23,6 +23,7 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 ## 输入来源
 - `messages`：当前要处理的消息列表（已包含 transcript 注入后的语音）
 - `sender_id` / `chat_id`
+- `message_metadata`（建议）：至少包含飞书 sender open_id、消息时间，用于透传 `operator_id` 和生成 `fitting_at`
 - `existing_open_bundle`（可选）
 - `existing_open_draft`（可选）
 - `context_policy`（可选，`inherit_if_safe` / `strict_isolation`）
@@ -44,6 +45,7 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - `write_decision`
 - `merge_notes`
 - `missing_fields`
+- `required_field_actions`
 
 ### input_bundle
 - `bundle_id`
@@ -55,7 +57,7 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - `routing_reason`
 
 ### fitting_records
-每项尽量包含主表保留字段（v2 字段集）：
+每项尽量包含主表保留字段（v2.1 字段集，20 字段）：
 - `session_id`
 - `guide_name`
 - `fitting_at`
@@ -69,7 +71,6 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - `fabric`
 - `category`
 - `tag_price`
-- `try_on_result`
 - `body_effect_desc`
 - `fit_feedback`
 - `liked_points`
@@ -98,14 +99,13 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 ## 阶段3：多源字段合并规则
 
 ### A. 必填字段前置校验
-要进入正式写表候选，以下字段必须可被稳定提取（v2 主表 8 个 required）：
+要进入正式写表候选，以下字段必须可被稳定提取（v2.1 主表 7 个 required）：
 - `session_id`
 - `guide_name`
 - `fitting_at`
 - `operator_id`
 - `product_code`
 - `product_name`
-- `try_on_result`
 - `raw_notes`
 
 若任一字段缺失：
@@ -118,6 +118,9 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - `operator_id` 应优先直接取自入站消息 metadata（飞书 sender open_id），不由模型从正文推断
 - 不得因为单条消息缺少姓名/门店，就忽略同一 sender 在历史中已经明确给过的信息
 - 只有在 `sender_profile` 不存在、或当前输入与历史资料冲突时，才允许将其标记到 `missing_fields`
+- `guide_name` 不得从"说话人是导购"这一角色事实推断为 `导购`、`店员`、`销售`、`默认导购` 等占位词
+- 当 `guide_name` 缺失且 `sender_profile/guide_profile` 没有已确认展示名时，必须把 `guide_name` 写入 `missing_fields`，并在 `required_field_actions` 中输出追问动作
+- 若本次文本出现"我是导购/我是店员"但没有姓名，这不构成可写的 `guide_name`
 
 ### C. 商品主值约束
 - `product_code` / `product_name` 应优先采用本次 bundle 的 OCR 结果 + 本次文本补充
@@ -133,15 +136,11 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 
 不强求每次写满四个；能拆出哪个写哪个；不要合并到单字段。
 
-### E. try_on_result 强枚举
-- 必须从 `合适` / `待考虑` / `未成交` / `已购` 中选一
-- 不允许自由文本
-- 仅有图片、无文本反馈时，不得编造 `try_on_result`
-
-### F. 编造限制
+### E. 编造限制
 - 不得编造必填字段
 - 在只有图片、没有明确文本反馈时，不得编造成交、试穿结果、是否购买、跟进意向等业务结论
 - 若无法稳定拿到必填字段，应阻断写入，而不是部分落表
+- 禁止通过通用角色名、占位词或默认值补齐 required 字段；这类值应进入 `suspicious_fields` 或 `missing_fields`
 
 ## 阶段4：pending_media 与 write_decision 判定
 
@@ -175,7 +174,14 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
       "write_target": "仅缓存等待"
     },
     "merge_notes": [],
-    "missing_fields": []
+    "missing_fields": [],
+    "required_field_actions": [
+      {
+        "field": "guide_name",
+        "action": "ask_user",
+        "message": "请补充导购姓名，之后同一导购可自动沿用。"
+      }
+    ]
   }
 }
 ```
