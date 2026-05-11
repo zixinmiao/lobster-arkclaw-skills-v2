@@ -13,7 +13,7 @@
       "fields": [
         { "name": "session_id", "type": "text", "required": true, "description": "试衣记录唯一标识；runtime 生成" },
         { "name": "guide_name", "type": "text", "required": true, "description": "导购展示姓名", "forbid_values": ["导购", "店员", "销售", "营业员", "未知", "默认导购", "测试导购", "N/A", ""], "forbid_pattern": "^ou_" },
-        { "name": "fitting_at", "type": "datetime", "required": true, "datetime_format": "yyyy/MM/dd HH:mm" },
+        { "name": "fitting_at", "type": "datetime", "required": true, "datetime_format": "yyyy/MM/dd HH:mm", "feishu_date_formatter": "yyyy/MM/dd HH:mm", "source_constraint": ["message_metadata.timestamp", "explicit_user_input", "card_confirmed"], "forbid_fabrication": true, "description": "试衣时间；必须来自飞书消息时间戳或导购显式提供，禁止模型从正文推断或编造日期" },
         { "name": "store_name", "type": "text", "required": false },
         { "name": "operator_id", "type": "text", "required": true, "description": "导购飞书 open_id；由 connector 透传", "match_pattern": "^ou_" },
         { "name": "member_mobile_last4", "type": "text", "required": false, "match_pattern": "^[0-9]{4}$" },
@@ -24,10 +24,10 @@
         { "name": "fabric", "type": "text", "required": false, "description": "面料；从吊牌成分行提取" },
         { "name": "category", "type": "select", "required": false, "options": ["上装", "下装", "连衣裙", "外套", "配饰"] },
         { "name": "tag_price", "type": "number", "required": false, "number_precision": 1 },
-        { "name": "body_effect_desc", "type": "text", "required": false, "description": "上身体型呈现（显瘦/肩窄/显高）" },
-        { "name": "fit_feedback", "type": "text", "required": false, "description": "版型反馈（腰部偏紧/袖长合适）" },
-        { "name": "liked_points", "type": "text", "required": false, "description": "客户主观喜欢点" },
-        { "name": "disliked_points", "type": "text", "required": false, "description": "客户主观不喜欢点" },
+        { "name": "body_effect_desc", "type": "text", "required": false, "description": "上身体型呈现（显瘦/肩窄/显高/腿长拉伸）；只在描述身体效果时填写，非身体效果一律留空", "leave_empty_if_no_match": true },
+        { "name": "fit_feedback", "type": "text", "required": false, "description": "版型/合身度反馈（腰部偏紧/袖长合适/材质不贴合/肩线偏宽）；含否定句式（不X/X不Y）的合身度评价优先归入此字段", "leave_empty_if_no_match": true },
+        { "name": "liked_points", "type": "text", "required": false, "description": "客户明确表达的喜欢点（颜色好看/版型显瘦/面料舒服）；必须是正面评价，'试穿了'/'看了一下'等中性描述一律留空", "leave_empty_if_no_match": true, "forbid_neutral_context": true },
+        { "name": "disliked_points", "type": "text", "required": false, "description": "客户明确表达的不喜欢点或负面评价（颜色暗/材质硬/不贴合/不修身）；含'不X'/'X不Y'/'觉得X差'句式时优先归入此字段或 fit_feedback", "leave_empty_if_no_match": true },
         { "name": "not_buy_reason", "type": "text", "required": false },
         { "name": "followup_intent", "type": "text", "required": false },
         { "name": "raw_notes", "type": "text", "required": true, "description": "原始文本/语音转写/卡片备注" },
@@ -157,10 +157,56 @@
       "trusted_sources": ["current_message_explicit", "sender_profile_confirmed", "guide_profile_confirmed", "card_confirmed", "trusted_contact"],
       "blocking_action": "ask_user: 请补充导购姓名，之后同一导购可自动沿用。"
     },
+    "store_name": {
+      "must_have_trusted_source": true,
+      "trusted_sources": ["current_message_explicit", "sender_profile_confirmed", "guide_profile_confirmed", "card_confirmed"],
+      "blocking_action": "ask_user: 请补充门店名称，之后同一导购可自动沿用。",
+      "rationale": "store_name 虽非 required，但缺失时仍必须追问，不得静默落表；同一 sender 后续可继承"
+    },
     "operator_id": {
       "must_have_trusted_source": true,
       "trusted_sources": ["message_metadata"],
       "rationale": "operator_id 必须由 connector 从飞书消息 metadata 直接透传，不允许由模型从正文推断或导购手填"
+    },
+    "fitting_at": {
+      "must_have_trusted_source": true,
+      "trusted_sources": ["message_metadata.timestamp", "explicit_user_input", "card_confirmed"],
+      "forbid_fabrication": true,
+      "rationale": "fitting_at 必须来自飞书消息时间戳或导购显式提供；模型不得从正文猜测日期，也不得编造历史日期"
+    },
+    "feedback_fields": {
+      "fields": ["body_effect_desc", "fit_feedback", "liked_points", "disliked_points"],
+      "rules": [
+        "每个字段独立判断；无明确语义匹配 → 留空，不要拼凑",
+        "liked_points 必须是客户正面评价；'会员X试穿了'/'看了一下'/'拿了一件'等中性描述一律留空",
+        "disliked_points 收纳客户负面评价；'不X'/'X不Y'/'有点X'等否定/贬义句式优先归入；若同时涉及合身度可放 fit_feedback",
+        "body_effect_desc 只填体型呈现（显瘦/拉腿/肩窄）；不要把合身度或喜好混入",
+        "fit_feedback 是版型/合身度反馈（腰部偏紧/袖长合适/材质不贴合）；含合身度否定句式时归入此字段或 disliked_points"
+      ],
+      "examples": [
+        {"raw": "会员0998试穿后，感觉材质不太贴合", "fit_feedback": "材质不贴合", "disliked_points": "材质不贴合", "body_effect_desc": "", "liked_points": "", "note": "中性描述'会员0998试穿'不构成 liked_points"},
+        {"raw": "颜色挺好看的，就是腰太紧了", "liked_points": "颜色好看", "fit_feedback": "腰部偏紧", "disliked_points": "腰部偏紧", "body_effect_desc": "", "note": "正面+合身度否定，分别归入"},
+        {"raw": "客户拿了一件S码试穿", "liked_points": "", "fit_feedback": "", "disliked_points": "", "body_effect_desc": "", "note": "纯中性描述，四字段全空"}
+      ]
+    }
+  },
+  "write_gate_rules": {
+    "rationale": "写入前最高优先级护栏；任一项失败必须立即返回 ask_user/blocked，绝不进入正式写入路径。本块对所有写表 skill 生效，尤其针对小模型（如 MiniMax）减少串联到 validator 时被跳过的风险。",
+    "must_stop_write_if": [
+      "guide_name 缺失，且 sender_profile/guide_profile 没有已确认值",
+      "store_name 缺失，且 sender_profile/guide_profile 没有已确认值",
+      "operator_id 不以 ou_ 开头",
+      "fitting_at 不是来自 message_metadata.timestamp / explicit_user_input / card_confirmed",
+      "product_code / product_name 缺失",
+      "raw_notes 缺失",
+      "validator_result.can_write != true",
+      "write_decision.allow_write != true",
+      "bundle_status = pending_media"
+    ],
+    "required_field_action_template": {
+      "guide_name": {"action": "ask_user", "message": "请补充导购姓名，之后同一导购可自动沿用。"},
+      "store_name": {"action": "ask_user", "message": "请补充门店名称，之后同一导购可自动沿用。"},
+      "fitting_at": {"action": "use_metadata_timestamp", "message": "使用消息时间戳作为 fitting_at，不要编造日期。"}
     }
   },
   "bootstrap_protocol": {

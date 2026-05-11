@@ -5,6 +5,22 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 
 # 试衣输入流水线（v2 合并 skill）
 
+## ⚠️ 写入前最高优先级护栏（小模型必读）
+
+**任一项失败必须立即返回 `required_field_actions` 中的 ask_user 动作，绝不能用占位词/角色名/编造值补齐后落表。** 适用于所有模型，但对 MiniMax 等小模型尤其关键 —— 这是入口护栏，不能依赖下游 validator 兜底。
+
+| 检查项 | 失败 → 立即返回 |
+|---|---|
+| `guide_name` 是否来自可信源（current_message_explicit / sender_profile_confirmed / guide_profile_confirmed / card_confirmed / trusted_contact） | `ask_user: 请补充导购姓名，之后同一导购可自动沿用。` |
+| `store_name` 是否来自可信源（同上来源集合，去掉 trusted_contact） | `ask_user: 请补充门店名称，之后同一导购可自动沿用。` |
+| `fitting_at` 是否来自 `message_metadata.timestamp` / 导购显式提供 / 卡片确认 | **直接使用 message_metadata.timestamp**；**禁止从正文推断日期，禁止编造历史日期** |
+| `operator_id` 是否以 `ou_` 开头并来自 message_metadata | `block: operator_id 必须由 connector 透传，不可由模型生成` |
+| `product_code` / `product_name` / `raw_notes` 是否齐备 | `ask_user` 或 `pending_media` |
+
+**强约束**：上述任一项失败时，`write_decision.allow_write` 必须为 `false`，`fitting_records` 不得对应字段填占位值。
+
+权威规则见 [`../references/schema.json`](../references/schema.json) 的 `write_gate_rules` 与 `value_validation_rules`。
+
 ## 目标
 把 v1 中"先 bundle-router 归并、再 record-merge 合并字段"两步合并为一次调用，对外只暴露一个 skill，但内部仍按阶段执行，保留 `pending_media` 状态机。
 
@@ -120,7 +136,17 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - 只有在 `sender_profile` 不存在、或当前输入与历史资料冲突时，才允许将其标记到 `missing_fields`
 - `guide_name` 不得从"说话人是导购"这一角色事实推断为 `导购`、`店员`、`销售`、`默认导购` 等占位词
 - 当 `guide_name` 缺失且 `sender_profile/guide_profile` 没有已确认展示名时，必须把 `guide_name` 写入 `missing_fields`，并在 `required_field_actions` 中输出追问动作
+- **`store_name` 缺失时同样必须追问**：写入 `missing_fields`，输出 `required_field_actions` 的 ask_user 动作；不得静默落表
 - 若本次文本出现"我是导购/我是店员"但没有姓名，这不构成可写的 `guide_name`
+
+### B.1 fitting_at 来源约束
+- **fitting_at 必须来自以下来源之一，否则写入失败**：
+  1. `message_metadata.timestamp`（首选；connector 透传的飞书消息时间）
+  2. 导购在文本/语音中显式提供的具体时间（如"昨天下午3点"，需结合 message_metadata 解析为绝对时间）
+  3. 卡片确认后导购填写
+- **严禁**模型从正文猜测日期、编造历史日期、或使用与 message_metadata.timestamp 相差超过 1 天的值
+- 若 `message_metadata.timestamp` 缺失且导购未显式提供，必须把 `fitting_at` 写入 `missing_fields`，`write_decision.allow_write = false`
+- 典型错误：今天是 2026-05-11 但 fitting_at 写成 2026-03-14，这是编造，必须阻断
 
 ### C. 商品主值约束
 - `product_code` / `product_name` 应优先采用本次 bundle 的 OCR 结果 + 本次文本补充
@@ -128,13 +154,37 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
 - `fabric` / `category` 优先从 OCR 提取；如 OCR 未识别，可从文本/语音补充
 
 ### D. 反馈四字段填充
-基于导购原始输入主动做语义拆分，分别填充：
-- `body_effect_desc`：客户实际穿着后体型呈现
-- `fit_feedback`：版型反馈
-- `liked_points`：客户主观喜欢点
-- `disliked_points`：客户主观不喜欢点
 
-不强求每次写满四个；能拆出哪个写哪个；不要合并到单字段。
+四个字段各有明确语义边界，独立判断；**无明确语义匹配 → 留空（空字符串或不写键），严禁拼凑或把中性描述塞进去**。
+
+| 字段 | 适用语义 | 典型词 |
+|---|---|---|
+| `body_effect_desc` | 客户上身后**体型呈现** | 显瘦、拉长腿型、肩窄、显高、显腰细 |
+| `fit_feedback` | **版型/合身度**反馈（含否定句式优先归此） | 腰部偏紧、袖长合适、肩线偏宽、材质不贴合、版型偏大 |
+| `liked_points` | 客户**正面评价**（必须明确正向） | 颜色好看、面料舒服、设计感强、显气质 |
+| `disliked_points` | 客户**负面评价**（含否定/贬义句式优先归此） | 颜色暗、材质硬、不修身、不贴合、价格贵 |
+
+#### 关键填写规则
+
+1. **中性描述一律留空**：`'会员0998试穿'` / `'客户拿了一件'` / `'看了一下'` / `'试了'` 不是 liked_points，必须留空。"试穿了"只是行为描述，不是评价。
+2. **否定句式优先归 disliked_points 或 fit_feedback**：包含 `'不X'` / `'X不Y'` / `'有点X'`（贬义）/ `'觉得X差'` 的内容必须归入 disliked_points 或 fit_feedback，不能放到 body_effect_desc 或 liked_points。
+3. **合身度否定句式优先归 fit_feedback**：如 `'不贴合'` / `'腰太紧'` / `'袖子短'`，先看是否属于版型/合身度评价，若是则归 fit_feedback；同时也可冗余到 disliked_points（同一负面点可同时出现在两字段）。
+4. **正反情绪分别拆**：如 `'颜色挺好看的，就是腰太紧了'` → liked_points = '颜色好看'，fit_feedback = '腰部偏紧'，disliked_points = '腰部偏紧'。
+5. **能拆出哪个写哪个**，但不要为了凑满四字段而编造内容。
+
+#### 正反例（必读）
+
+| raw_notes | body_effect_desc | fit_feedback | liked_points | disliked_points |
+|---|---|---|---|---|
+| 会员0998试穿后，感觉材质不太贴合 | （空） | 材质不贴合 | （空，"试穿"不是 liked） | 材质不贴合 |
+| 颜色挺好看的，就是腰太紧了 | （空） | 腰部偏紧 | 颜色好看 | 腰部偏紧 |
+| 客户拿了一件S码试穿 | （空） | （空） | （空） | （空） |
+| 上身显瘦，腿型也拉长了，客户很满意 | 显瘦，拉长腿型 | （空） | 显瘦显高 | （空） |
+| 觉得颜色偏暗了，不太衬肤色 | （空） | （空） | （空） | 颜色偏暗，不衬肤色 |
+
+❌ **错误示例**：raw_notes = `'会员0998试穿后，感觉材质不太贴合'` 时，把 `'会员0998试穿'` 填到 `liked_points` —— 这是中性描述，不是评价；同时漏掉 `'不贴合'` —— 必须归入 disliked_points 或 fit_feedback。
+
+权威规则与 examples 见 [`../references/schema.json`](../references/schema.json) 的 `value_validation_rules.feedback_fields`。
 
 ### E. 编造限制
 - 不得编造必填字段
@@ -174,12 +224,17 @@ description: 把飞书会话中的图、音、文消息一站式归并、做 ses
       "write_target": "仅缓存等待"
     },
     "merge_notes": [],
-    "missing_fields": [],
+    "missing_fields": ["guide_name", "store_name"],
     "required_field_actions": [
       {
         "field": "guide_name",
         "action": "ask_user",
         "message": "请补充导购姓名，之后同一导购可自动沿用。"
+      },
+      {
+        "field": "store_name",
+        "action": "ask_user",
+        "message": "请补充门店名称，之后同一导购可自动沿用。"
       }
     ]
   }

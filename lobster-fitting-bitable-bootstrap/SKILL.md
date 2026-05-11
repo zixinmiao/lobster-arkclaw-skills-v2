@@ -88,9 +88,10 @@ description: 在试衣数据准备写入飞书多维表格前，检查并补齐 
   - 字段名缺失 → `+field-create --json '{"field_name":"{f.name}", "type":"{type_id}", ...}'`，**字段名严格使用 `f.name`，不得做大小写/翻译变体**
   - 字段类型不一致 → `+field-update`（注意飞书侧某些类型变更受限，必要时报错而非擅自改）
   - select 字段必须按 `f.options` 预置选项；不允许字段建好后让用户填
+  - datetime 字段必须传 `property.date_formatter`，取自 schema 的 `f.feishu_date_formatter`（兜底 `f.datetime_format`）；**严禁使用飞书默认 `yyyy/MM/dd`，否则时间分量丢失**
 - 字段名映射规则：
   - schema 中 `type=text` → 飞书 Text（短文本/长文本由 description 暗示，统一用 Text）
-  - schema 中 `type=datetime` → 飞书 DateTime（**严禁建成 Text**）
+  - schema 中 `type=datetime` → 飞书 DateTime（**严禁建成 Text**；**必须传 `date_formatter`**，例如 fitting_at → `"yyyy/MM/dd HH:mm"`）
   - schema 中 `type=select` → 飞书 SingleSelect + 预置 options
   - schema 中 `type=number` → 飞书 Number
   - schema 中 `type=checkbox` → 飞书 Checkbox
@@ -98,13 +99,33 @@ description: 在试衣数据准备写入飞书多维表格前，检查并补齐 
 - 字段名禁止变体（典型）：`guidename` / `guideName` / `导购` / `导购姓名` / `导购名称` 不得替代 `guide_name`；完整禁止表见 schema.json 的 `field_naming_rules.forbidden_synonyms`
 - 若线上已有同义/变体字段，不要把写入映射到变体字段，应补齐 canonical 字段并在 `schema_status` 中标记 `drift_detected`，同时 log 出变体字段名供人工治理
 
+#### 4.0 datetime 字段创建示例
+```bash
+# 错误（飞书默认 date_formatter 是 "yyyy/MM/dd"，时间分量会丢失）：
+lark-cli base +field-create --field-name fitting_at --type datetime
+
+# 正确：
+lark-cli base +field-create --field-name fitting_at --type datetime \
+  --property '{"date_formatter":"yyyy/MM/dd HH:mm"}'
+```
+schema.json 中所有 `type=datetime` 字段（fitting_at / 日期 / 最近更新时间 / 计划提醒时间 / 实际提醒时间 / 计划触达时间 / captured_at / updated_at）**全部需要显式传 `date_formatter`**，否则默认丢失时间信息。
+
 ### 4.1 回读校验（v2.1 关键，治本）
 建表+建字段后，**必须再次 `+field-list`** 比对 schema.json：
 - 对 schema 中每个 required 字段，检查线上是否存在且类型一致
 - 缺失 → `schema_status = drift_detected`，binding_status 不得置为 `ready`
 - 类型不一致（例如 `fitting_at` 建成了 text）→ `schema_status = type_mismatch`，binding_status 不得置为 `ready`
+- **datetime 字段的 `style.format` 必须等于 schema 的 `feishu_date_formatter`（兜底 `datetime_format`）**；不一致 → `schema_status = format_mismatch`，必须 `+field-update` 修正后再回读，binding_status 不得置为 `ready`。典型陷阱：fitting_at 被建成 `style.format = "yyyy/MM/dd"`，时间分量丢失
 - 出现 schema 中没有的字段（如"导购小龙虾试衣台账"误成字段）→ `schema_status = unexpected_fields`，log 出来供人工删除
 - 只有上述检查全通过，才进入第 5 步构建 `field_map`
+
+#### 4.1.1 format 修正示例
+```bash
+# 发现 fitting_at 的 style.format 是 "yyyy/MM/dd"（缺时间分量）：
+lark-cli base +field-update --field-id <fitting_at_field_id> \
+  --property '{"date_formatter":"yyyy/MM/dd HH:mm"}'
+# 修正后必须再 +field-list 回读确认 style.format 已变更
+```
 
 ### 5. 构建 field_map
 - 读取每张表的字段列表
